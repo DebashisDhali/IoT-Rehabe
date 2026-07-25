@@ -145,10 +145,15 @@
         ` : `
         <div class="session-row">সেশন সময় <strong>${formatDuration(liveSessionSeconds(live, stale))}</strong></div>
         <dl class="stats">
+          <div class="stat"><dt>র' EMG</dt><dd>${live.rawEmg != null ? Math.round(live.rawEmg) : "—"}</dd></div>
+          <div class="stat"><dt>র' Flex</dt><dd>${live.rawFlex != null ? Math.round(live.rawFlex) : "—"}</dd></div>
+          <div class="stat"><dt>Pulse Sample</dt><dd>${live.rawPulseSample != null ? Math.round(live.rawPulseSample) : "—"}</dd></div>
+          <div class="stat"><dt>Pulse BPM</dt><dd>${live.heartRateStrain != null ? Math.round(live.heartRateStrain) + " bpm" : "—"}</dd></div>
           <div class="stat"><dt>রেপ সংখ্যা</dt><dd>${live.reps ?? "—"}</dd></div>
           <div class="stat"><dt>রেডিনেস স্কোর</dt><dd>${live.readinessScore != null ? Number(live.readinessScore).toFixed(2) : "—"}</dd></div>
           <div class="stat"><dt>মাসল লোড</dt><dd>${live.muscleFatigue != null ? Math.round(live.muscleFatigue) + "%" : "—"}</dd></div>
-          <div class="stat"><dt>হার্ট রেট</dt><dd>${live.heartRateStrain != null ? Math.round(live.heartRateStrain) + " bpm" : "—"}</dd></div>
+          <div class="stat"><dt>লিডস অফ</dt><dd>${live.leadsOff ? "YES" : "no"}</dd></div>
+          <div class="stat"><dt>স্ট্যাটাস</dt><dd>${live.status || "—"}</dd></div>
           <div class="stat"><dt>ডেক্সটারিটি</dt><dd>${live.dexterityScore != null ? Math.round(live.dexterityScore) + "%" : "—"}</dd></div>
           <div class="stat"><dt>ইনটেনসিটি</dt><dd>${live.intensity != null ? Number(live.intensity).toFixed(2) + "g" : "—"}</dd></div>
         </dl>
