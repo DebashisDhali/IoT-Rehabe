@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rehab Monitor — Trainer Dashboard</title>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+  // ============================================
+  // এখানে আপনার Firebase কনফিগ বসান
+  // Firebase Console > Project Settings > General > Your apps > SDK setup and configuration
+  // ============================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyDwXf6A0JLl_s3S04-O7gBesjc_9ZKxyz4",
+    authDomain: "rehabe-bb3ed.firebaseapp.com",
+    databaseURL: "https://rehabe-bb3ed-default-rtdb.firebaseio.com",
+    projectId: "rehabe-bb3ed",
+    storageBucket: "rehabe-bb3ed.firebasestorage.app",
+    messagingSenderId: "607791195155",
+    appId: "1:607791195155:web:5a91446b751e3a13500be6",
+    measurementId: "G-VQ3G7KC7FP"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const patientsRef = ref(db, "patients");
+
+  const STALE_SECONDS = 15;
+
+  // ---------- DOM refs ----------
+  const grid = document.getElementById("grid");
+  const emptyState = document.getElementById("empty-state");
+  const noResults = document.getElementById("no-results");
+  const connState = document.getElementById("conn-state");
+  const searchInput = document.getElementById("search-input");
+  const filterBar = document.getElementById("filter-bar");
+  const chipTotal = document.getElementById("chip-total");
+  const chipOk = document.getElementById("chip-ok");
+  const chipWarn = document.getElementById("chip-warn");
+  const chipDanger = document.getElementById("chip-danger");
+  const chipOffline = document.getElementById("chip-offline");
+  const chartBody = document.getElementById("chart-body");
+  const chartEmpty = document.getElementById("chart-empty");
+
+  // ---------- state ----------
+  let latestData = null;
+  let searchQuery = "";
+  let activeFilter = "all";
+
+  // ---------- helpers ----------
+  function statusMeta(status) {
+    const s = String(status || "").trim().toUpperCase();
+    if (s === "HIGH_STRAIN") return { key: "danger", label: "উচ্চ স্ট্রেইন" };
+    if (s === "POOR_READINESS") return { key: "warning", label: "কম রেডিনেস" };
+    return { key: "ok", label: "স্বাভাবিক" };
+  }
+
+  function isStale(ts) {
+    if (!ts) return true;
+    return (Date.now() / 1000 - ts) > STALE_SECONDS;
+  }
+
+  function formatDuration(totalSeconds) {
+    if (totalSeconds == null || totalSeconds < 0) return "—";
+    const s = Math.floor(totalSeconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}ঘ ${m}মি ${sec}সে`;
+    if (m > 0) return `${m}মি ${sec}সে`;
+    return `${sec}সে`;
+  }
+
+  // ডিভাইস প্রতি ২ সেকেন্ডে একবার sessionSeconds পাঠায়; শেষ পাঠানোর পর থেকে
+  // যতটুকু সময় গেছে সেটা যোগ করে লাইভ-টিকিং কাউন্টার দেখানো হয় (রি-রেন্ডারে)
+  function liveSessionSeconds(live, stale) {
+    if (live.sessionSeconds == null) return null;
+    if (stale || !live.timestamp) return live.sessionSeconds;
+    const elapsedSinceUpdate = Math.max(0, Math.floor(Date.now() / 1000) - live.timestamp);
+    return live.sessionSeconds + elapsedSinceUpdate;
+  }
+
+  function timeAgo(ts) {
+    if (!ts) return "কোনো ডেটা নেই";
+    const diff = Math.floor(Date.now() / 1000) - ts;
+    if (diff < 5) return "এখনই";
+    if (diff < 60) return diff + " সেকেন্ড আগে";
+    if (diff < 3600) return Math.floor(diff / 60) + " মিনিট আগে";
+    return Math.floor(diff / 3600) + " ঘণ্টা আগে";
+  }
+
+  // rank 0 = most urgent, shown first
+  function severityRank(meta, stale) {
+    if (stale) return 1;
+    if (meta.key === "danger") return 0;
+    if (meta.key === "warning") return 2;
+    return 3;
+  }
+
+  function buildRows(val) {
+    if (!val) return [];
+    return Object.entries(val).map(([id, data]) => {
+      const live = data.live || {};
+      const meta = statusMeta(live.status);
+      const stale = isStale(live.timestamp);
+      return {
+        id,
+        live,
+        meta,
+        stale,
+        rank: severityRank(meta, stale),
+      };
+    });
+  }
+
+  function applyFiltersAndSort(rows) {
+    let out = rows;
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      out = out.filter(r => r.id.toLowerCase().includes(q));
+    }
+
+    if (activeFilter !== "all") {
+      out = out.filter(r => {
+        if (activeFilter === "offline") return r.stale;
+        return !r.stale && r.meta.key === activeFilter;
+      });
+    }
+
+    out.sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      // within same rank, worse readiness / higher fatigue first
+      const fa = a.live.muscleFatigue ?? -1;
+      const fb = b.live.muscleFatigue ?? -1;
+      return fb - fa;
+    });
+
+    return out;
+  }
+
+  // ---------- rendering ----------
+  function renderCard(row) {
+    const { id, live, meta, stale } = row;
+    const isAlert = !stale && meta.key === "danger";
+
+    return `
+      <article class="card ${meta.key} ${stale ? "stale" : ""} ${isAlert ? "alert-pulse" : ""}" data-id="${id}">
+        <header class="card-head">
+          <h2>${id}</h2>
+          <span class="badge ${stale ? "offline" : meta.key}">${stale ? "অফলাইন" : meta.label}</span>
+        </header>
+        <div class="conn-row">
+          <span class="conn-dot ${stale ? "off" : "on"}"></span>
+          <span>${stale ? "ডিভাইস সংযোগ বিচ্ছিন্ন" : "ডিভাইস সংযুক্ত"}</span>
+        </div>
+        <div class="session-row">সেশন সময়: <strong>${formatDuration(liveSessionSeconds(live, stale))}</strong></div>
+        <dl class="stats">
+          <div class="stat">
+            <dt>রেপ সংখ্যা</dt>
+            <dd>${live.reps ?? "—"}</dd>
+          </div>
+          <div class="stat">
+            <dt>রেডিনেস স্কোর</dt>
+            <dd>${live.readinessScore != null ? Number(live.readinessScore).toFixed(2) : "—"}</dd>
+          </div>
+          <div class="stat">
+            <dt>মাসল লোড</dt>
+            <dd>${live.muscleFatigue != null ? Math.round(live.muscleFatigue) + "%" : "—"}</dd>
+          </div>
+          <div class="stat">
+            <dt>হার্ট রেট</dt>
+            <dd>${live.heartRateStrain != null ? Math.round(live.heartRateStrain) + " bpm" : "—"}</dd>
+          </div>
+          <div class="stat">
+            <dt>ডেক্সটারিটি</dt>
+            <dd>${live.dexterityScore != null ? Math.round(live.dexterityScore) + "%" : "—"}</dd>
+          </div>
+          <div class="stat">
+            <dt>ইনটেনসিটি</dt>
+            <dd>${live.intensity != null ? Number(live.intensity).toFixed(2) + "g" : "—"}</dd>
+          </div>
+        </dl>
+        <footer class="card-foot">সবশেষ আপডেট: <span class="ts">${timeAgo(live.timestamp)}</span></footer>
+      </article>
+    `;
+  }
+
+  function renderChart(rows) {
+    if (!rows.length) {
+      chartBody.innerHTML = "";
+      chartEmpty.style.display = "block";
+      return;
+    }
+    chartEmpty.style.display = "none";
+    chartBody.innerHTML = rows.map(row => {
+      const pct = row.live.muscleFatigue != null ? Math.max(0, Math.min(100, Math.round(row.live.muscleFatigue))) : 0;
+      const cls = row.stale ? "offline" : row.meta.key;
+      return `
+        <div class="chart-row">
+          <span class="chart-label">${row.id}</span>
+          <div class="chart-track">
+            <div class="chart-fill ${cls}" style="width:${pct}%"></div>
+          </div>
+          <span class="chart-value">${row.live.muscleFatigue != null ? pct + "%" : "—"}</span>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderSummary(rows) {
+    const total = rows.length;
+    const ok = rows.filter(r => !r.stale && r.meta.key === "ok").length;
+    const warn = rows.filter(r => !r.stale && r.meta.key === "warning").length;
+    const danger = rows.filter(r => !r.stale && r.meta.key === "danger").length;
+    const offline = rows.filter(r => r.stale).length;
+
+    chipTotal.textContent = `মোট: ${total}`;
+    chipOk.textContent = `স্বাভাবিক: ${ok}`;
+    chipWarn.textContent = `কম রেডিনেস: ${warn}`;
+    chipDanger.textContent = `উচ্চ স্ট্রেইন: ${danger}`;
+    chipOffline.textContent = `অফলাইন: ${offline}`;
+  }
+
+  function render() {
+    const allRows = buildRows(latestData);
+
+    if (!allRows.length) {
+      grid.innerHTML = "";
+      noResults.style.display = "none";
+      emptyState.style.display = "block";
+      renderSummary([]);
+      renderChart([]);
+      return;
+    }
+    emptyState.style.display = "none";
+
+    // summary + chart always reflect the search query but not the category filter,
+    // so trainers keep a full picture while narrowing the grid below
+    const searchedRows = searchQuery.trim()
+      ? allRows.filter(r => r.id.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+      : allRows;
+    const sortedForChart = [...searchedRows].sort((a, b) => a.rank - b.rank);
+    renderSummary(searchedRows);
+    renderChart(sortedForChart);
+
+    const visibleRows = applyFiltersAndSort(allRows);
+
+    if (!visibleRows.length) {
+      grid.innerHTML = "";
+      noResults.style.display = "block";
+      return;
+    }
+    noResults.style.display = "none";
+    grid.innerHTML = visibleRows.map(renderCard).join("");
+  }
+
+  // ---------- events ----------
+  onValue(patientsRef, (snapshot) => {
+    latestData = snapshot.val();
+    connState.textContent = "লাইভ";
+    connState.classList.add("live");
+
+    // ডিবাগ: ব্রাউজারের কনসোলে (F12 > Console) প্রতিটা পেশেন্টের raw status ও
+    // timestamp দেখাবে — বাজার বাজলে এখানে status ঠিক "HIGH_STRAIN" আসছে কিনা যাচাই করুন
+    if (latestData) {
+      Object.entries(latestData).forEach(([id, data]) => {
+        const live = data.live || {};
+        console.log(`[rehab-monitor] ${id} -> status: "${live.status}", timestamp: ${live.timestamp}`);
+      });
+    }
+
+    render();
+  }, (error) => {
+    connState.textContent = "সংযোগ ব্যর্থ";
+    connState.classList.remove("live");
+    console.error(error);
+  });
+
+  searchInput.addEventListener("input", (e) => {
+    searchQuery = e.target.value;
+    render();
+  });
+
+  filterBar.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-filter]");
+    if (!btn) return;
+    activeFilter = btn.dataset.filter;
+    [...filterBar.querySelectorAll("button")].forEach(b => b.classList.toggle("active", b === btn));
+    render();
+  });
+
+  // প্রতি ৫ সেকেন্ডে "কতক্ষণ আগে" সময় ও অফলাইন স্ট্যাটাস রিফ্রেশ করার জন্য পুনরায় রেন্ডার
+  setInterval(render, 5000);
+</script>
+<style>
+  :root {
+    --bg: #f5f7f4;
+    --surface: #ffffff;
+    --border: #dde2dc;
+    --text-primary: #1b2118;
+    --text-secondary: #5c655c;
+    --ok-bg: #eaf3de; --ok-text: #27500a; --ok-border: #97c459;
+    --warn-bg: #faeeda; --warn-text: #633806; --warn-border: #ef9f27;
+    --danger-bg: #fcebeb; --danger-text: #501313; --danger-border: #e24b4a;
+    --offline-bg: #ececee; --offline-text: #4b5158; --offline-border: #9aa1a9;
+    --accent: #0f6e56;
+    font-family: -apple-system, "Segoe UI", "Noto Sans Bengali", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+
+  /* ---------- topbar ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 20px 32px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  .topbar .sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+  #conn-state {
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--border);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  #conn-state.live { background: var(--ok-bg); color: var(--ok-text); }
+
+  main { padding: 24px 32px 60px; max-width: 1200px; margin: 0 auto; }
+
+  /* ---------- summary chips ---------- */
+  .summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .chip {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+  .chip.ok { background: var(--ok-bg); color: var(--ok-text); border-color: var(--ok-border); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn-text); border-color: var(--warn-border); }
+  .chip.danger { background: var(--danger-bg); color: var(--danger-text); border-color: var(--danger-border); }
+  .chip.offline { background: var(--offline-bg); color: var(--offline-text); border-color: var(--offline-border); }
+
+  /* ---------- controls: search + filter ---------- */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  #search-input {
+    flex: 1 1 240px;
+    padding: 10px 14px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text-primary);
+    outline: none;
+  }
+  #search-input:focus { border-color: var(--accent); }
+  #filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+  #filter-bar button {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  #filter-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #filter-bar button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #ffffff;
+  }
+
+  /* ---------- comparison chart ---------- */
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 24px;
+  }
+  .chart-card h3 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .chart-card .chart-sub { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; }
+  .chart-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 48px;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .chart-label { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chart-track { background: var(--bg); border-radius: 6px; height: 10px; overflow: hidden; }
+  .chart-fill { height: 100%; border-radius: 6px; transition: width 0.4s ease; }
+  .chart-fill.ok { background: var(--ok-border); }
+  .chart-fill.warning { background: var(--warn-border); }
+  .chart-fill.danger { background: var(--danger-border); }
+  .chart-fill.offline { background: var(--offline-border); }
+  .chart-value { font-size: 12px; font-weight: 600; text-align: right; }
+  #chart-empty { font-size: 13px; color: var(--text-secondary); }
+
+  /* ---------- grid ---------- */
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 18px;
+  }
+  #empty-state, #no-results {
+    display: none;
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-secondary);
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .card.ok { border-left-color: var(--ok-border); }
+  .card.warning { border-left-color: var(--warn-border); }
+  .card.danger { border-left-color: var(--danger-border); }
+  .card.stale { opacity: 0.6; border-left-color: var(--offline-border); }
+
+  /* fully red, pulsing alert box for active high-strain readings */
+  .card.alert-pulse {
+    background: var(--danger-bg);
+    border-color: var(--danger-border);
+    animation: alertPulse 1.6s ease-in-out infinite;
+  }
+  @keyframes alertPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(226, 75, 74, 0.45); }
+    50% { box-shadow: 0 0 0 8px rgba(226, 75, 74, 0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card.alert-pulse { animation: none; }
+  }
+
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .card-head h2 { font-size: 17px; font-weight: 600; margin: 0; }
+  .badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--border); color: var(--text-secondary); }
+  .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
+  .badge.warning { background: var(--warn-bg); color: var(--warn-text); }
+  .badge.danger { background: var(--danger-bg); color: var(--danger-text); }
+  .badge.offline { background: var(--offline-bg); color: var(--offline-text); }
+
+  .conn-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .conn-dot.on { background: var(--ok-border); }
+  .conn-dot.off { background: var(--offline-border); }
+  .session-row { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; }
+  .session-row strong { color: var(--text-primary); font-weight: 600; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin: 0; }
+  .stat dt { font-size: 12px; color: var(--text-secondary); margin-bottom: 2px; }
+  .stat dd { font-size: 17px; font-weight: 600; margin: 0; }
+  .card-foot { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>Rehab Monitor</h1>
+      <div class="sub">সব পেশেন্টের লাইভ স্ট্যাটাস</div>
+    </div>
+    <span id="conn-state">সংযোগ হচ্ছে...</span>
+  </div>
+  <main>
+    <div class="summary-row">
+      <span class="chip" id="chip-total">মোট: 0</span>
+      <span class="chip ok" id="chip-ok">স্বাভাবিক: 0</span>
+      <span class="chip warn" id="chip-warn">কম রেডিনেস: 0</span>
+      <span class="chip danger" id="chip-danger">উচ্চ স্ট্রেইন: 0</span>
+      <span class="chip offline" id="chip-offline">অফলাইন: 0</span>
+    </div>
+
+    <div class="controls">
+      <input id="search-input" type="text" placeholder="পেশেন্ট আইডি দিয়ে খুঁজুন..." autocomplete="off">
+      <div id="filter-bar">
+        <button data-filter="all" class="active">সব</button>
+        <button data-filter="danger">উচ্চ স্ট্রেইন</button>
+        <button data-filter="warning">কম রেডিনেস</button>
+        <button data-filter="ok">স্বাভাবিক</button>
+        <button data-filter="offline">অফলাইন</button>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h3>মাসল লোড তুলনা</h3>
+      <div class="chart-sub">সবচেয়ে খারাপ অবস্থার পেশেন্ট উপরে দেখানো হয়েছে</div>
+      <div id="chart-body"></div>
+      <div id="chart-empty">কোনো ডেটা নেই।</div>
+    </div>
+
+    <div id="grid"></div>
+    <div id="empty-state">এখনো কোনো পেশেন্টের ডেটা আসেনি। ESP32 ডিভাইস চালু আছে কিনা এবং WiFi কানেক্টেড কিনা যাচাই করুন।</div>
+    <div id="no-results">এই সার্চ বা ফিল্টারে কোনো পেশেন্ট পাওয়া যায়নি।</div>
+  </main>
+</body>
+</html>
