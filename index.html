@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Rehab Monitor — Trainer Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
@@ -38,6 +41,7 @@
   const chipOffline = document.getElementById("chip-offline");
   const chartBody = document.getElementById("chart-body");
   const chartEmpty = document.getElementById("chart-empty");
+  const clockEl = document.getElementById("clock");
 
   let latestData = null;
   let searchQuery = "";
@@ -120,18 +124,16 @@
     return out;
   }
 
-  // ---------- rendering ----------
-  // stale (অফলাইন) হলে পুরনো/frozen সংখ্যা না দেখিয়ে "—" দেখানো হয়,
-  // যাতে ট্রেইনার পুরনো ডেটাকে বর্তমান অবস্থা ভুল করে না ধরেন
   function renderCard(row) {
     const { id, live, meta, stale } = row;
     const isAlert = !stale && meta.key === "danger";
-    const v = (val, suffix = "") => (stale ? "—" : (val != null ? val + suffix : "—"));
 
     return `
       <article class="card ${stale ? "offline" : meta.key} ${isAlert ? "alert-pulse" : ""}" data-id="${id}">
         <header class="card-head">
-          <h2>${id}</h2>
+          <div class="tag">
+            <span class="tag-id">${id}</span>
+          </div>
           <span class="badge ${stale ? "offline" : meta.key}">${stale ? "অফলাইন" : meta.label}</span>
         </header>
         <div class="conn-row">
@@ -141,9 +143,9 @@
         ${stale ? `
         <div class="offline-notice">এই ডিভাইস থেকে এখন কোনো ডেটা আসছে না। শেষ পরিচিত মান দেখানো হচ্ছে না — ডিভাইসটি চালু ও WiFi সংযুক্ত আছে কিনা যাচাই করুন।</div>
         ` : `
-        <div class="session-row">সেশন সময়: <strong>${formatDuration(liveSessionSeconds(live, stale))}</strong></div>
+        <div class="session-row">সেশন সময় <strong>${formatDuration(liveSessionSeconds(live, stale))}</strong></div>
         <dl class="stats">
-          <div class="stat"><dt>রেপ সংখ্যা</dt><dd>${v(live.reps)}</dd></div>
+          <div class="stat"><dt>রেপ সংখ্যা</dt><dd>${live.reps ?? "—"}</dd></div>
           <div class="stat"><dt>রেডিনেস স্কোর</dt><dd>${live.readinessScore != null ? Number(live.readinessScore).toFixed(2) : "—"}</dd></div>
           <div class="stat"><dt>মাসল লোড</dt><dd>${live.muscleFatigue != null ? Math.round(live.muscleFatigue) + "%" : "—"}</dd></div>
           <div class="stat"><dt>হার্ট রেট</dt><dd>${live.heartRateStrain != null ? Math.round(live.heartRateStrain) + " bpm" : "—"}</dd></div>
@@ -151,7 +153,7 @@
           <div class="stat"><dt>ইনটেনসিটি</dt><dd>${live.intensity != null ? Number(live.intensity).toFixed(2) + "g" : "—"}</dd></div>
         </dl>
         `}
-        <footer class="card-foot">সবশেষ আপডেট: <span class="ts">${timeAgo(live.timestamp)}</span></footer>
+        <footer class="card-foot">সবশেষ আপডেট <span class="ts">${timeAgo(live.timestamp)}</span></footer>
       </article>
     `;
   }
@@ -163,7 +165,6 @@
       return;
     }
     chartEmpty.style.display = "none";
-    // অফলাইন ডিভাইসের জন্য বার শূন্য দেখানো হয় (পুরনো মাসল লোড দেখানো হয় না)
     chartBody.innerHTML = rows.map(row => {
       const pct = (!row.stale && row.live.muscleFatigue != null) ? Math.max(0, Math.min(100, Math.round(row.live.muscleFatigue))) : 0;
       const cls = row.stale ? "offline" : row.meta.key;
@@ -186,11 +187,11 @@
     const danger = rows.filter(r => !r.stale && r.meta.key === "danger").length;
     const offline = rows.filter(r => r.stale).length;
 
-    chipTotal.textContent = `মোট: ${total}`;
-    chipOk.textContent = `স্বাভাবিক: ${ok}`;
-    chipWarn.textContent = `কম রেডিনেস: ${warn}`;
-    chipDanger.textContent = `উচ্চ স্ট্রেইন: ${danger}`;
-    chipOffline.textContent = `অফলাইন: ${offline}`;
+    chipTotal.textContent = total;
+    chipOk.textContent = ok;
+    chipWarn.textContent = warn;
+    chipDanger.textContent = danger;
+    chipOffline.textContent = offline;
   }
 
   function render() {
@@ -248,115 +249,421 @@
     render();
   });
 
-  // প্রতি ৫ সেকেন্ডে রিফ্রেশ করা হয় যাতে "কতক্ষণ আগে" ও অফলাইন স্ট্যাটাস আপডেট থাকে
+  function tickClock() {
+    const now = new Date();
+    clockEl.textContent = now.toLocaleTimeString("bn-BD", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
   setInterval(render, 5000);
 </script>
 <style>
   :root {
-    --bg: #f5f7f4;
-    --surface: #ffffff;
-    --border: #dde2dc;
-    --text-primary: #1b2118;
-    --text-secondary: #5c655c;
-    --ok-bg: #eaf3de; --ok-text: #27500a; --ok-border: #97c459;
-    --warn-bg: #faeeda; --warn-text: #633806; --warn-border: #ef9f27;
-    --danger-bg: #fcebeb; --danger-text: #501313; --danger-border: #e24b4a;
-    --offline-bg: #ececee; --offline-text: #4b5158; --offline-border: #9aa1a9;
-    --accent: #0f6e56;
-    font-family: -apple-system, "Segoe UI", "Noto Sans Bengali", Roboto, sans-serif;
+    /* ---- token system ---- */
+    --bg: #0f1513;
+    --bg-grid: #131a18;
+    --surface: #161f1c;
+    --surface-raised: #1b2622;
+    --hairline: #2a3733;
+    --hairline-soft: #212b27;
+    --text-primary: #eef2ee;
+    --text-secondary: #8fa199;
+    --text-tertiary: #5d6d66;
+    --accent: #e3a34d;
+    --accent-soft: rgba(227, 163, 77, 0.14);
+
+    --ok: #6fbf7b;
+    --ok-bg: rgba(111, 191, 123, 0.12);
+    --ok-border: #3f7a4a;
+
+    --warn: #e3a34d;
+    --warn-bg: rgba(227, 163, 77, 0.12);
+    --warn-border: #9c6d2c;
+
+    --danger: #e2645a;
+    --danger-bg: rgba(226, 100, 90, 0.13);
+    --danger-border: #a13d35;
+
+    --offline: #7a8680;
+    --offline-bg: rgba(122, 134, 128, 0.10);
+    --offline-border: #45524c;
+
+    --font-display: "Fraunces", serif;
+    --font-body: "Noto Sans Bengali", "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   }
+
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text-primary); min-height: 100vh; }
-
-  .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 20px 32px; background: var(--surface); border-bottom: 1px solid var(--border); }
-  .topbar h1 { font-size: 20px; font-weight: 600; margin: 0; }
-  .topbar .sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
-  #conn-state { font-size: 13px; padding: 5px 12px; border-radius: 999px; background: var(--border); color: var(--text-secondary); white-space: nowrap; }
-  #conn-state.live { background: var(--ok-bg); color: var(--ok-text); }
-
-  main { padding: 24px 32px 60px; max-width: 1200px; margin: 0 auto; }
-
-  .summary-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
-  .chip { font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--text-secondary); }
-  .chip.ok { background: var(--ok-bg); color: var(--ok-text); border-color: var(--ok-border); }
-  .chip.warn { background: var(--warn-bg); color: var(--warn-text); border-color: var(--warn-border); }
-  .chip.danger { background: var(--danger-bg); color: var(--danger-text); border-color: var(--danger-border); }
-  .chip.offline { background: var(--offline-bg); color: var(--offline-text); border-color: var(--offline-border); }
-
-  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 20px; }
-  #search-input { flex: 1 1 240px; padding: 10px 14px; font-size: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text-primary); outline: none; }
-  #search-input:focus { border-color: var(--accent); }
-  #filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
-  #filter-bar button { font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); cursor: pointer; }
-  #filter-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #filter-bar button.active { background: var(--accent); border-color: var(--accent); color: #ffffff; }
-
-  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 24px; }
-  .chart-card h3 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
-  .chart-card .chart-sub { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; }
-  .chart-row { display: grid; grid-template-columns: 90px 1fr 48px; align-items: center; gap: 10px; margin-bottom: 8px; }
-  .chart-label { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chart-track { background: var(--bg); border-radius: 6px; height: 10px; overflow: hidden; }
-  .chart-fill { height: 100%; border-radius: 6px; transition: width 0.4s ease; }
-  .chart-fill.ok { background: var(--ok-border); }
-  .chart-fill.warning { background: var(--warn-border); }
-  .chart-fill.danger { background: var(--danger-border); }
-  .chart-fill.offline { background: var(--offline-border); }
-  .chart-value { font-size: 12px; font-weight: 600; text-align: right; }
-  #chart-empty { font-size: 13px; color: var(--text-secondary); }
-
-  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
-  #empty-state, #no-results { display: none; text-align: center; padding: 80px 20px; color: var(--text-secondary); }
-  .card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 12px; padding: 18px 20px; }
-  .card.ok { border-left-color: var(--ok-border); }
-  .card.warning { border-left-color: var(--warn-border); }
-  .card.danger { border-left-color: var(--danger-border); }
-  .card.offline { border-left-color: var(--offline-border); background: var(--offline-bg); }
-
-  .card.alert-pulse { background: var(--danger-bg); border-color: var(--danger-border); animation: alertPulse 1.6s ease-in-out infinite; }
-  @keyframes alertPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(226, 75, 74, 0.45); }
-    50% { box-shadow: 0 0 0 8px rgba(226, 75, 74, 0); }
+  html { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(1200px 500px at 15% -10%, rgba(227,163,77,0.06), transparent 60%),
+      var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-body);
   }
-  @media (prefers-reduced-motion: reduce) { .card.alert-pulse { animation: none; } }
 
-  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  .card-head h2 { font-size: 17px; font-weight: 600; margin: 0; }
-  .badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--border); color: var(--text-secondary); }
-  .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
-  .badge.warning { background: var(--warn-bg); color: var(--warn-text); }
-  .badge.danger { background: var(--danger-bg); color: var(--danger-text); }
-  .badge.offline { background: var(--offline-bg); color: var(--offline-text); }
+  ::selection { background: var(--accent-soft); color: var(--text-primary); }
 
-  .conn-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
-  .conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .conn-dot.on { background: var(--ok-border); }
-  .conn-dot.off { background: var(--offline-border); }
-  .session-row { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; }
-  .session-row strong { color: var(--text-primary); font-weight: 600; }
-  .offline-notice { font-size: 12px; color: var(--offline-text); background: #ffffffaa; border: 1px dashed var(--offline-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin: 0; }
-  .stat dt { font-size: 12px; color: var(--text-secondary); margin-bottom: 2px; }
-  .stat dd { font-size: 17px; font-weight: 600; margin: 0; }
-  .card-foot { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); }
+  /* ---------- topbar ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 22px 36px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--hairline);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand h1 {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 600;
+    font-size: 23px;
+    letter-spacing: 0.2px;
+    margin: 0;
+    color: var(--text-primary);
+  }
+  .brand .sub {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    letter-spacing: 0.02em;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 16px; }
+  #clock {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.03em;
+    display: none;
+  }
+  @media (min-width: 640px) { #clock { display: inline; } }
+
+  #conn-state {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 12px 6px 10px;
+    border-radius: 999px;
+    background: var(--offline-bg);
+    border: 1px solid var(--offline-border);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    letter-spacing: 0.04em;
+  }
+  #conn-state::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--offline);
+  }
+  #conn-state.live {
+    background: var(--ok-bg);
+    border-color: var(--ok-border);
+    color: var(--ok);
+  }
+  #conn-state.live::before {
+    background: var(--ok);
+    box-shadow: 0 0 0 0 rgba(111,191,123, 0.5);
+    animation: livePing 2s ease-in-out infinite;
+  }
+  @keyframes livePing {
+    0% { box-shadow: 0 0 0 0 rgba(111,191,123, 0.45); }
+    70% { box-shadow: 0 0 0 6px rgba(111,191,123, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(111,191,123, 0); }
+  }
+
+  main { padding: 28px 36px 64px; max-width: 1220px; margin: 0 auto; }
+
+  /* ---------- vitals summary strip ---------- */
+  .summary-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 14px;
+    margin-bottom: 22px;
+    overflow: hidden;
+  }
+  .chip {
+    padding: 15px 18px;
+    border-right: 1px solid var(--hairline-soft);
+    min-width: 0;
+  }
+  .chip:last-child { border-right: none; }
+  .chip .chip-num {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--text-primary);
+  }
+  .chip .chip-label {
+    display: block;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    letter-spacing: 0.01em;
+  }
+  .chip.ok .chip-num { color: var(--ok); }
+  .chip.warn .chip-num { color: var(--warn); }
+  .chip.danger .chip-num { color: var(--danger); }
+  .chip.offline .chip-num { color: var(--offline); }
+
+  @media (max-width: 720px) {
+    .summary-row { grid-template-columns: repeat(3, 1fr); }
+    .chip:nth-child(3) { border-right: none; }
+  }
+
+  /* ---------- controls ---------- */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+    margin-bottom: 22px;
+  }
+  #search-input {
+    flex: 1 1 240px;
+    padding: 11px 16px;
+    font-size: 13.5px;
+    font-family: var(--font-body);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text-primary);
+    outline: none;
+  }
+  #search-input::placeholder { color: var(--text-tertiary); }
+  #search-input:focus { border-color: var(--accent); }
+
+  #filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 4px;
+  }
+  #filter-bar button {
+    font-family: var(--font-body);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 7px 13px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  #filter-bar button:hover { color: var(--text-primary); }
+  #filter-bar button.active {
+    background: var(--surface-raised);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--hairline);
+  }
+
+  /* ---------- chart card ---------- */
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 14px;
+    padding: 20px 22px;
+    margin-bottom: 26px;
+  }
+  .chart-card h3 {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 16px;
+    margin: 0 0 3px;
+    color: var(--text-primary);
+  }
+  .chart-card .chart-sub { font-size: 12px; color: var(--text-tertiary); margin-bottom: 16px; }
+  .chart-row {
+    display: grid;
+    grid-template-columns: 76px 1fr 50px;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .chart-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chart-track {
+    background: var(--bg-grid);
+    border: 1px solid var(--hairline-soft);
+    border-radius: 5px;
+    height: 9px;
+    overflow: hidden;
+  }
+  .chart-fill { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
+  .chart-fill.ok { background: var(--ok); }
+  .chart-fill.warning { background: var(--warn); }
+  .chart-fill.danger { background: var(--danger); }
+  .chart-fill.offline { background: var(--offline); }
+  .chart-value { font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-align: right; color: var(--text-secondary); }
+  #chart-empty { font-size: 13px; color: var(--text-tertiary); }
+
+  /* ---------- grid & cards ---------- */
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  #empty-state, #no-results {
+    display: none;
+    text-align: center;
+    padding: 70px 20px;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    background: var(--surface);
+    border: 1px dashed var(--hairline);
+    border-radius: 14px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 14px;
+    padding: 18px 20px;
+    position: relative;
+  }
+  .card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    border-radius: 14px 0 0 14px;
+    background: var(--offline);
+  }
+  .card.ok::before { background: var(--ok); }
+  .card.warning::before { background: var(--warn); }
+  .card.danger::before { background: var(--danger); }
+  .card.offline::before { background: var(--offline); }
+  .card.offline { background: var(--surface); opacity: 0.72; }
+
+  .card.alert-pulse {
+    background: var(--danger-bg);
+    border-color: var(--danger-border);
+    animation: alertPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes alertPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(226, 100, 90, 0.35); }
+    50% { box-shadow: 0 0 0 7px rgba(226, 100, 90, 0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card.alert-pulse, #conn-state.live::before { animation: none; }
+  }
+
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .tag-id {
+    font-family: var(--font-mono);
+    font-size: 15.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+  }
+  .badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--offline-bg);
+    border: 1px solid var(--offline-border);
+    color: var(--offline);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .badge.ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
+  .badge.warning { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
+  .badge.danger { background: var(--danger-bg); border-color: var(--danger-border); color: var(--danger); }
+  .badge.offline { background: var(--offline-bg); border-color: var(--offline-border); color: var(--offline); }
+
+  .conn-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .conn-dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
+  .conn-dot.off { background: var(--offline); }
+
+  .session-row { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; }
+  .session-row strong { font-family: var(--font-mono); color: var(--text-primary); font-weight: 600; }
+
+  .offline-notice {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    background: var(--bg-grid);
+    border: 1px dashed var(--hairline);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+  }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; margin: 0; }
+  .stat dt { font-size: 11px; color: var(--text-tertiary); margin-bottom: 3px; letter-spacing: 0.01em; }
+  .stat dd { font-family: var(--font-mono); font-size: 18px; font-weight: 600; margin: 0; color: var(--text-primary); }
+
+  .card-foot {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hairline-soft);
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+  }
+  .card-foot .ts { color: var(--text-secondary); font-family: var(--font-mono); }
 </style>
 </head>
 <body>
   <div class="topbar">
-    <div>
+    <div class="brand">
       <h1>Rehab Monitor</h1>
-      <div class="sub">সব পেশেন্টের লাইভ স্ট্যাটাস</div>
+      <span class="sub">সব পেশেন্টের লাইভ স্ট্যাটাস</span>
     </div>
-    <span id="conn-state">সংযোগ হচ্ছে...</span>
+    <div class="topbar-right">
+      <span id="clock">--:--:--</span>
+      <span id="conn-state">সংযোগ হচ্ছে</span>
+    </div>
   </div>
   <main>
     <div class="summary-row">
-      <span class="chip" id="chip-total">মোট: 0</span>
-      <span class="chip ok" id="chip-ok">স্বাভাবিক: 0</span>
-      <span class="chip warn" id="chip-warn">কম রেডিনেস: 0</span>
-      <span class="chip danger" id="chip-danger">উচ্চ স্ট্রেইন: 0</span>
-      <span class="chip offline" id="chip-offline">অফলাইন: 0</span>
+      <div class="chip">
+        <span class="chip-num" id="chip-total">0</span>
+        <span class="chip-label">মোট পেশেন্ট</span>
+      </div>
+      <div class="chip ok">
+        <span class="chip-num" id="chip-ok">0</span>
+        <span class="chip-label">স্বাভাবিক</span>
+      </div>
+      <div class="chip warn">
+        <span class="chip-num" id="chip-warn">0</span>
+        <span class="chip-label">কম রেডিনেস</span>
+      </div>
+      <div class="chip danger">
+        <span class="chip-num" id="chip-danger">0</span>
+        <span class="chip-label">উচ্চ স্ট্রেইন</span>
+      </div>
+      <div class="chip offline">
+        <span class="chip-num" id="chip-offline">0</span>
+        <span class="chip-label">অফলাইন</span>
+      </div>
     </div>
 
     <div class="controls">
